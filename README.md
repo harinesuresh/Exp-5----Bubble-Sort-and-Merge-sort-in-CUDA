@@ -1,4 +1,6 @@
 # Exp5 Bubble Sort and Merge sort in CUDA
+### NAME: HARINE S
+### REG NO: 212224230081
 **Objective:**
 Implement Bubble Sort and Merge Sort on the GPU using CUDA, analyze the efficiency of this sorting algorithm when parallelized, and explore the limitations of Bubble Sort and Merge Sort for large datasets.
 ## AIM:
@@ -27,10 +29,261 @@ c. Comparison:
 Compare the performance of the CUDA-based Bubble Sort and Merge Sort with a CPU-based Bubble Sort and Merge Sort implementation.
 Discuss the differences in execution time and explain the limitations of Bubble Sort and Merge Sort when parallelized on the GPU.
 ## PROGRAM:
-TYPE YOUR CODE HERE
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <cuda.h>
+#include <chrono>
 
+__global__ void bubbleSortKernel(int *d_arr, int n) {
+    int temp;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if (blockIdx.x > 0) return;
+
+    for (int i = 0; i < n - 1; i++) {
+        if (idx < n - 1 - i) {
+            if (d_arr[idx] > d_arr[idx + 1]) {
+                temp = d_arr[idx];
+                d_arr[idx] = d_arr[idx + 1];
+                d_arr[idx + 1] = temp;
+            }
+        }
+        __syncthreads();
+    }
+}
+
+__device__ void merge(int *arr, int left, int mid, int right, int *temp) {
+    int i = left, j = mid + 1, k = left;
+
+    while (i <= mid && j <= right) {
+        if (arr[i] <= arr[j]) {
+            temp[k++] = arr[i++];
+        } else {
+            temp[k++] = arr[j++];
+        }
+    }
+
+    while (i <= mid) {
+        temp[k++] = arr[i++];
+    }
+
+    while (j <= right) {
+        temp[k++] = arr[j++];
+    }
+
+    for (i = left; i <= right; i++) {
+        arr[i] = temp[i];
+    }
+}
+
+__global__ void mergeSortKernel(int *d_arr, int *d_temp, int n) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    for (int size = 1; size < n; size *= 2) {
+        int left = 2 * size * tid;
+        if (left < n) {
+            int mid = min(left + size - 1, n - 1);
+            int right = min(left + 2 * size - 1, n - 1);
+
+            merge(d_arr, left, mid, right, d_temp);
+        }
+
+        __syncthreads();
+
+        if (tid == 0) {
+            int *temp = d_arr;
+            d_arr = d_temp;
+            d_temp = temp;
+        }
+
+        __syncthreads();
+    }
+}
+
+void mergeHost(int *arr, int left, int mid, int right) {
+    int i, j, k;
+    int n1 = mid - left + 1;
+    int n2 = right - mid;
+
+    int *L = (int*)malloc(n1 * sizeof(int));
+    int *R = (int*)malloc(n2 * sizeof(int));
+
+    for (i = 0; i < n1; i++)
+        L[i] = arr[left + i];
+    for (j = 0; j < n2; j++)
+        R[j] = arr[mid + 1 + j];
+
+    i = 0;
+    j = 0;
+    k = left;
+
+    while (i < n1 && j < n2) {
+        if (L[i] <= R[j]) {
+            arr[k] = L[i];
+            i++;
+        } else {
+            arr[k] = R[j];
+            j++;
+        }
+        k++;
+    }
+
+    while (i < n1) {
+        arr[k] = L[i];
+        i++;
+        k++;
+    }
+
+    while (j < n2) {
+        arr[k] = R[j];
+        j++;
+        k++;
+    }
+
+    free(L);
+    free(R);
+}
+
+void bubbleSort(int *arr, int n, int blockSize, int numBlocks) {
+    int *d_arr;
+    cudaMalloc((void**)&d_arr, n * sizeof(int));
+    cudaMemcpy(d_arr, arr, n * sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    bubbleSortKernel<<<numBlocks, blockSize>>>(d_arr, n);
+    cudaDeviceSynchronize();
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    cudaMemcpy(arr, d_arr, n * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaFree(d_arr);
+
+    printf("Bubble Sort (GPU) took %f milliseconds\n", milliseconds);
+}
+
+void mergeSort(int *arr, int n, int blockSize, int numBlocks) {
+    int *d_arr, *d_temp;
+    cudaMalloc((void**)&d_arr, n * sizeof(int));
+    cudaMalloc((void**)&d_temp, n * sizeof(int));
+    cudaMemcpy(d_arr, arr, n * sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    mergeSortKernel<<<numBlocks, blockSize>>>(d_arr, d_temp, n);
+    cudaDeviceSynchronize();
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    cudaMemcpy(arr, d_arr, n * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaFree(d_arr);
+    cudaFree(d_temp);
+
+    printf("Merge Sort (GPU) took %f milliseconds\n", milliseconds);
+}
+
+void bubbleSortCPU(int *arr, int n) {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = 0; j < n - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+    printf("Bubble Sort (CPU) took %f milliseconds\n", duration.count());
+}
+
+void mergeSortCPU(int *arr, int n) {
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int size = 1; size < n; size *= 2) {
+        int left = 0;
+        while (left + size < n) {
+            int mid = left + size - 1;
+            int right = min(left + 2 * size - 1, n - 1);
+
+            mergeHost(arr, left, mid, right);
+            left += 2 * size;
+        }
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+    printf("Merge Sort (CPU) took %f milliseconds\n", duration.count());
+}
+
+int main() {
+    int n_array[] = {500, 1000};
+    for (int i = 0; i < 2; i++) {
+        int n = n_array[i];
+        int *arr = (int*)malloc(n * sizeof(int));
+
+        int blockSize_array[] = {16, 32};
+
+        for (int i = 0; i < 2; i++) {
+            int blockSize = blockSize_array[i];
+            int numBlocks = (n + blockSize - 1) / blockSize;
+
+            printf("\nArray Size:%d\nBlock Size:%d\nNum Blocks:%d\n", n, blockSize, numBlocks);
+
+            for (int i = 0; i < n; i++) {
+                arr[i] = rand() % 1000;
+            }
+
+            bubbleSortCPU(arr, n);
+
+            for (int i = 0; i < n; i++) {
+                arr[i] = rand() % 1000;
+            }
+
+            bubbleSort(arr, n, blockSize, numBlocks);
+
+            for (int i = 0; i < n; i++) {
+                arr[i] = rand() % 1000;
+            }
+
+            mergeSortCPU(arr, n);
+
+            for (int i = 0; i < n; i++) {
+                arr[i] = rand() % 1000;
+            }
+
+            mergeSort(arr, n, blockSize, numBlocks);
+            printf("\n");
+        }
+        free(arr);
+    }
+    return 0;
+}
+
+
+```
 ## OUTPUT:
-SHOW YOUR OUTPUT HERE
+
+<img width="554" height="771" alt="image" src="https://github.com/user-attachments/assets/839032bb-3a14-461f-b8c0-e595680e4339" />
+
 
 ## RESULT:
-Thus, the program has been executed using CUDA to ________________.
+Thus, the program has been executed using CUDA to implement Bubble Sort and Merge Sort on the GPU using CUDA and analyze the efficiency of this sorting algorithm when parallelized.
